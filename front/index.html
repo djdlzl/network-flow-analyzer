@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>Network Flow Analysis</title>
+  <!-- 마크다운 렌더링 라이브러리 추가 -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { font-family: 'Helvetica Neue', Arial, sans-serif; margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: radial-gradient(circle at top left, #e0d6ff, #c2d4ff); }
+    .wrapper { width: 100%; max-width: 1000px; padding: 40px 20px; }
+    h1 { font-size: 2.5rem; font-weight: 700; margin-bottom: 0.5rem; text-align:center; }
+    .subtext { text-align:center; color:#666; margin-bottom:2rem; font-size:1.1rem; }
+    h1 { margin-bottom: 1rem; }
+    label { font-weight: bold; }
+    select, textarea, button { width: 100%; margin-top: 0.5rem; margin-bottom: 1rem; padding: 0.6rem; font-size: 1rem; }
+    textarea { height: 120px; }
+    pre { background: #f5f5f5; padding: 1rem; overflow-x: auto; }
+    /* 마크다운 스타일 추가 */
+    .markdown-content { padding: 1rem; border: 1px solid #ddd; border-radius: 4px; }
+    .markdown-content h3 { margin-top: 1.5rem; margin-bottom: 1rem; border-bottom: 1px solid #eee; padding-bottom: 0.3rem; }
+    .markdown-content h4 { margin-top: 1rem; margin-bottom: 0.5rem; }
+    .markdown-content ul, .markdown-content ol { padding-left: 1.5rem; }
+    .markdown-content code { background-color: #f0f0f0; padding: 2px 4px; border-radius: 3px; font-family: monospace; }
+  /* Regions spacing */
+  #regions label { margin-right: 0.75rem; margin-bottom: 0.5rem; }
+    /* Controls section styling: nested card removed, layout uses wrapper card only */
+    h1 { text-align: center; }
+  </style>
+</head>
+<body>
+  <!-- Main container card: 전체 UI를 감싸는 카드 -->
+  <!-- Header section: 제목과 설명 표시 -->
+  <div class="wrapper card p-4 mb-4 mx-auto bg-white shadow-sm rounded-4">
+  <!-- Header section: 애플리케이션 제목 -->
+  <h1>Network Flow Analyzer</h1>
+  <!-- Header section: 부제목 -->
+  <p class="subtext">account/region을 선택한 후 네트워크 관련 질문을 할 수 있습니다. <br/>네트워크 정보를 새로 받아올 경우 analyze 버튼 하단의 '네트워크 정보 갱신' 버튼을 클릭해주세요. </p>
+
+  <!-- Controls section: 계정, 리전 선택, 질문 입력, Analyze 버튼, 네트워크 정보 갱신 체크박스 -->
+  <div class="controls mb-4 w-100">
+    <div class="d-flex mb-3 gap-3">
+      <div class="flex-fill">
+        <label for="account" class="form-label">Account</label>
+        <select id="account" class="form-select"></select>
+      </div>
+      <div class="flex-fill">
+        <label for="regions" class="form-label">Regions</label>
+        <select id="regions" class="form-select"></select>
+      </div>
+    </div>
+    
+
+    <div class="mb-3">
+      <label for="prompt" class="form-label">질문 (네트워크 문제)</label>
+      <textarea id="prompt" class="form-control" placeholder="예) 10.10.19.5 인스턴스에서 외부 네트워크 172.31.0.0/16 대역으로 VPN 통신이 가능해?"></textarea>
+    </div>
+    <div class="d-grid mb-3">
+      <button id="run" class="btn btn-primary">Analyze</button>
+    </div>
+    <div class="d-flex align-items-center mb-3">
+        <div class="form-check mb-0 me-3">
+          <input class="form-check-input" type="checkbox" id="refresh">
+          <label class="form-check-label" for="refresh">네트워크 정보 갱신</label>
+        </div>
+      <span id="lastRefresh" class="text-muted small"></span>
+    </div>
+    
+  </div>
+
+  <!-- Controls section end -->
+  <!-- Answer section: LLM 응답 표시 -->
+  <h2>Answer</h2>
+  <div id="answer" class="markdown-content card p-4 mb-4 bg-white w-100" style="white-space:pre-wrap;"></div>
+  <!-- End of answer section -->
+
+  <!-- Matched Rows section: Qdrant에서 가져온 맥락 행 표시 -->
+  <h2>Matched Rows</h2>
+  <pre id="hits" class="card p-3 bg-light w-100"></pre>
+  <!-- End of matched rows section -->
+<!-- End of main container card -->
+
+<script>
+  // Region display names
+  const regionNames = {
+    "ap-northeast-2": "서울 (ap-northeast-2)",
+    "ap-northeast-1": "도쿄 (ap-northeast-1)",
+    "ap-southeast-1": "싱가포르 (ap-southeast-1)",
+    "ap-southeast-2": "시드니 (ap-southeast-2)",
+    "us-east-1": "버지니아 북부 (us-east-1)",
+    "us-west-1": "캘리포니아 북부 (us-west-1)",
+    "us-west-2": "오리건 (us-west-2)",
+    "eu-central-1": "프랑크푸르트 (eu-central-1)",
+    "eu-west-1": "아일랜드 (eu-west-1)",
+    "ap-south-1": "인도 (ap-south-1)"
+  };
+async function loadAccounts() {
+  // populate region list
+  const regionSel = document.getElementById('regions');
+  try {
+    const res = await fetch('/regions');
+    const regions = await res.json();
+    regionSel.innerHTML = regions.map(r => `<option value=\"${r}\">${regionNames[r] || r}</option>`).join('');
+  } catch(e) {
+    console.error('regions fetch failed', e);
+  }
+  const sel = document.getElementById('account');
+  sel.innerHTML = '<option>loading...</option>';
+  try {
+    const res = await fetch('/accounts');
+    const data = await res.json();
+    sel.innerHTML = data.map(a => `<option value="${a}">${a}</option>`).join('');
+  } catch (e) {
+    sel.innerHTML = '<option>error</option>';
+    console.error(e);
+  }
+}
+
+let historyCtx = "";
+
+async function analyze() {
+  const account = document.getElementById('account').value;
+  const promptElem = document.getElementById('prompt');
+  const prompt = promptElem.value;
+  const refresh = document.getElementById('refresh').checked;
+  const regionVal = document.getElementById('regions').value;
+  const regionsSel = regionVal ? [regionVal] : [];
+
+  if (!prompt.trim()) return alert('질문을 입력하세요');
+  document.getElementById('answer').textContent = '처리 중...';
+  document.getElementById('hits').textContent = '';
+  try {
+    const fullPrompt = historyCtx ? historyCtx + "\n\n" + prompt : prompt;
+    const res = await fetch('/analyze', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({account_name: account, prompt: fullPrompt, refresh, regions: regionsSel.length?regionsSel:null})
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'error');
+    document.getElementById('answer').innerHTML = marked.parse(data.answer);
+      // history 업데이트
+      historyCtx += `Q: ${prompt}\nA: ${data.answer}\n`;
+      promptElem.value = "";
+    document.getElementById('hits').textContent = JSON.stringify(data.hits, null, 2);
+    const lastElem = document.getElementById('lastRefresh');
+      if (data.last_refresh) {
+        const lastDate = new Date(data.last_refresh);
+        lastElem.textContent = '마지막 갱신: ' + lastDate.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' });
+      } else {
+        lastElem.textContent = '마지막 갱신: 모름';
+      }
+  } catch (e) {
+    document.getElementById('answer').textContent = 'Error: ' + e.message;
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  loadAccounts();
+  document.querySelector('#run').addEventListener('click', analyze);
+});
+</script>
+  </div>
+</body>
+</html>
