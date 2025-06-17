@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import hashlib
 import boto3
 
-import fetch_network_flow as nf
+from network_flow_analysis import fetch_network_flow as nf
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
